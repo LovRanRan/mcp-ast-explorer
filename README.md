@@ -1,8 +1,20 @@
 # mcp-ast-explorer
 
+<!-- mcp-name: io.github.LovRanRan/mcp-ast-explorer -->
+
 MCP server for deterministic Python codebase symbol exploration.
 
 `mcp-ast-explorer` indexes Python source files with LibCST and exposes focused MCP tools for codebase onboarding: definition lookup, function signatures, local references, direct call chains, and simple class hierarchy queries.
+
+## Codebase Onboarding Stack
+
+`mcp-ast-explorer` is the semantic symbol layer in a three-server MCP tool stack for Project 6 `wayfinder`, a codebase onboarding agent.
+
+- [`mcp-repo-mapper`](https://github.com/LovRanRan/mcp-repo-mapper) maps repository structure, languages, entry points, framework evidence, and Python dependency edges.
+- [`mcp-ast-explorer`](https://github.com/LovRanRan/mcp-ast-explorer) provides symbol-grounded Python definition, signature, reference, call-chain, and class-hierarchy lookups.
+- [`mcp-test-runner`](https://github.com/LovRanRan/mcp-test-runner) runs local pytest/Jest checks and coverage summaries so agent claims can be verified against execution.
+
+In `wayfinder`, this server feeds entry-point and symbol explanation while refusing to invent missing symbols.
 
 ## Status
 

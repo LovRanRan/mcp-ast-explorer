@@ -10,12 +10,26 @@ from mcp_ast_explorer.server import (
     find_references,
     function_signature,
     health,
+    main,
     mcp,
 )
 
 
 def test_health_returns_ok() -> None:
     assert health() == "ok"
+
+
+def test_main_runs_stdio_transport(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(mcp, "run", fake_run)
+
+    main()
+
+    assert calls == [{"transport": "stdio"}]
 
 
 def test_find_definition_returns_definition_for_existing_symbol(tmp_path: Path) -> None:
