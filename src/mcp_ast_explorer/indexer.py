@@ -1,9 +1,21 @@
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import libcst as cst
 from libcst.metadata import CodeRange, MetadataWrapper, PositionProvider
+
+from mcp_ast_explorer.models import (
+    CallChain,
+    CallChainCaller,
+    ClassHierarchy,
+    ClassHierarchySubclass,
+    ParsedPythonFile,
+    PythonCstIndex,
+    PythonParseError,
+    PythonReference,
+    PythonSymbol,
+    SourceLocation,
+    SymbolKind,
+)
 
 IGNORED_DIRS = {
     ".git",
@@ -13,9 +25,6 @@ IGNORED_DIRS = {
     ".pytest_cache",
     ".ruff_cache",
 }
-
-
-SymbolKind = Literal["module", "class", "function", "method"]
 
 
 def _module_name_for_path(relative_path: str) -> str:
@@ -44,6 +53,11 @@ class SymbolCollector(cst.CSTVisitor):
         position = _position_for(self, node)
         class_name = node.name.value
         qualified_name = ".".join([self.module_name, *self.class_stack, class_name])
+        base_classes = [
+            base.value.value
+            for base in node.bases
+            if isinstance(base.value, cst.Name)
+        ]
         self.symbols.append(
             PythonSymbol(
                 name=class_name,
@@ -57,6 +71,7 @@ class SymbolCollector(cst.CSTVisitor):
                 ),
                 signature=None,
                 source_code=_code_for_node(node),
+                base_classes=base_classes,
             )
         )
         self.class_stack.append(class_name)
@@ -83,9 +98,93 @@ class SymbolCollector(cst.CSTVisitor):
                 ),
                 signature=_function_signature(node),
                 source_code=_code_for_node(node),
+                base_classes=[],
             )
         )
         return True
+
+
+class ReferenceCollector(cst.CSTVisitor):
+    METADATA_DEPENDENCIES = (PositionProvider,)
+
+    def __init__(
+        self,
+        path: Path,
+        relative_path: str,
+        module_name: str,
+        symbols: list[PythonSymbol],
+        source: str,
+    ) -> None:
+        self.path = path
+        self.relative_path = relative_path
+        self.module_name = module_name
+        self.symbols = symbols
+        self.source = source
+        self.references: list[PythonReference] = []
+        self.function_stack: list[str] = []
+        self.symbols_by_qualified_name: dict[str, PythonSymbol] = {
+            symbol.qualified_name: symbol for symbol in symbols
+        }
+
+    def visit_Name(self, node: cst.Name) -> None:
+        qualified_name = f"{self.module_name}.{node.value}"
+        symbol = self.symbols_by_qualified_name.get(qualified_name)
+        if not symbol:
+            return None
+        position = _position_for(self, node)
+        if position.start.line == symbol.location.line:
+            return None
+        lines = self.source.splitlines()
+        context_code = lines[position.start.line - 1].strip()
+        location = SourceLocation(
+            path=self.path,
+            relative_path=self.relative_path,
+            line=position.start.line,
+            column=position.start.column,
+        )
+        self.references.append(
+            PythonReference(
+                name=node.value,
+                qualified_name=qualified_name,
+                kind=symbol.kind,
+                location=location,
+                context_code=context_code,
+                container_symbol=self.function_stack[-1] if self.function_stack else None,
+            )
+        )
+
+
+    def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
+        function_name = node.name.value
+        qualified_name = f"{self.module_name}.{function_name}"
+        self.function_stack.append(qualified_name)
+        return True
+
+    def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
+        self.function_stack.pop()
+
+
+def build_call_chain_in_index(
+    index: PythonCstIndex,
+    symbol: str,
+    depth: int = 2,
+) -> CallChain:
+    definition = find_definition_in_index(index, symbol)
+    callers: list[CallChainCaller] = []
+    if not definition:
+        return CallChain(symbol=symbol, callers=[])
+    references = find_references_in_index(index, symbol)
+    for reference in references:
+        if reference.container_symbol is None:
+            continue
+        callers.append(
+            CallChainCaller(
+                symbol=reference.container_symbol,
+                context_code=reference.context_code,
+            )
+        )
+
+    return CallChain(symbol=symbol, callers=callers)
 
 
 def _position_for(visitor: cst.CSTVisitor, node: cst.CSTNode) -> CodeRange:
@@ -93,54 +192,22 @@ def _position_for(visitor: cst.CSTVisitor, node: cst.CSTNode) -> CodeRange:
     return position
 
 
-@dataclass(frozen=True)
-class SourceLocation:
-    path: Path
-    relative_path: str
-    line: int
-    column: int
-
-
-@dataclass(frozen=True)
-class PythonSymbol:
-    name: str
-    qualified_name: str
-    kind: SymbolKind
-    location: SourceLocation
-    signature: str | None
-    source_code: str | None
-
-
-@dataclass(frozen=True)
-class ParsedPythonFile:
-    path: Path
-    relative_path: str
-    source: str
-    module: cst.Module
-
-
-@dataclass(frozen=True)
-class PythonParseError:
-    path: Path
-    relative_path: str
-    message: str
-    line: int
-    column: int
-
-
-@dataclass(frozen=True)
-class PythonCstIndex:
-    root: Path
-    files: list[ParsedPythonFile]
-    symbols: list[PythonSymbol]
-    parse_errors: list[PythonParseError]
-
-
 def find_definition_in_index(index: PythonCstIndex, symbol: str) -> PythonSymbol | None:
     for candidate in index.symbols:
         if candidate.qualified_name == symbol:
             return candidate
     return None
+
+
+def find_references_in_index(index: PythonCstIndex, symbol: str) -> list[PythonReference]:
+    definition = find_definition_in_index(index, symbol)
+    if not definition:
+        return []
+    return [
+        reference
+        for reference in index.references
+        if reference.qualified_name == definition.qualified_name
+    ]
 
 
 def _code_for_node(node: cst.CSTNode) -> str:
@@ -157,6 +224,7 @@ def build_cst_index(root: str | Path) -> PythonCstIndex:
     files: list[ParsedPythonFile] = []
     symbols: list[PythonSymbol] = []
     parse_errors: list[PythonParseError] = []
+    references: list[PythonReference] = []
 
     for path in sorted(root_path.rglob("*.py")):
         if _is_ignored(path, root_path):
@@ -193,13 +261,27 @@ def build_cst_index(root: str | Path) -> PythonCstIndex:
                 ),
                 signature=None,
                 source_code=None,
+                base_classes=[],
             )
         )
 
         wrapper = MetadataWrapper(module)
-        collector = SymbolCollector(path=path, relative_path=relative_path, module_name=module_name)
-        wrapper.visit(collector)
-        symbols.extend(collector.symbols)
+        symbol_collector = SymbolCollector(
+            path=path,
+            relative_path=relative_path,
+            module_name=module_name
+        )
+        wrapper.visit(symbol_collector)
+        symbols.extend(symbol_collector.symbols)
+        reference_collector = ReferenceCollector(
+            path=path,
+            relative_path=relative_path,
+            module_name=module_name,
+            symbols=symbols,
+            source=source,
+        )
+        wrapper.visit(reference_collector)
+        references.extend(reference_collector.references)
         files.append(
             ParsedPythonFile(
                 path=path,
@@ -214,4 +296,25 @@ def build_cst_index(root: str | Path) -> PythonCstIndex:
         files=files,
         symbols=symbols,
         parse_errors=parse_errors,
+        references=references,
     )
+
+
+def build_class_hierarchy_in_index(
+    index: PythonCstIndex,
+    class_name: str,
+) -> ClassHierarchy:
+    target = find_definition_in_index(index, class_name)
+    if target is None or target.kind != "class":
+        return ClassHierarchy(class_name=class_name, subclasses=[])
+
+    subclasses = [
+        ClassHierarchySubclass(
+            class_name=candidate.qualified_name,
+            location=candidate.location,
+        )
+        for candidate in index.symbols
+        if candidate.kind == "class" and target.name in candidate.base_classes
+    ]
+
+    return ClassHierarchy(class_name=class_name, subclasses=subclasses)

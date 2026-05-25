@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from mcp_ast_explorer.indexer import build_cst_index, find_definition_in_index
+from mcp_ast_explorer.indexer import (
+    build_call_chain_in_index,
+    build_class_hierarchy_in_index,
+    build_cst_index,
+    find_definition_in_index,
+    find_references_in_index,
+)
 
 
 def test_build_cst_index_parses_python_files(tmp_path: Path) -> None:
@@ -138,3 +144,143 @@ def test_build_cst_index_records_parse_errors_and_continues(tmp_path: Path) -> N
     assert "parser error" in parse_error.message
     assert parse_error.line == 1
     assert parse_error.column == 0
+
+
+def test_find_references_in_index_returns_call_site_for_existing_function(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    target = package_dir / "service.py"
+    target.write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+    index = build_cst_index(tmp_path)
+    references = find_references_in_index(index, "app.service.add")
+
+    assert len(references) == 1
+    reference = references[0]
+
+    assert reference.qualified_name == "app.service.add"
+    assert reference.name == "add"
+    assert reference.kind == "function"
+    assert reference.location.relative_path == "app/service.py"
+    assert reference.location.line == 5
+    assert reference.context_code == "return add(1, 2)"
+
+
+def test_find_references_in_index_returns_empty_for_missing_symbol(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "service.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+
+    index = build_cst_index(tmp_path)
+
+    assert find_references_in_index(index, "app.service.missing") == []
+
+
+def test_build_call_chain_in_index_returns_direct_caller(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "service.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+
+    index = build_cst_index(tmp_path)
+    chain = build_call_chain_in_index(index, "app.service.add", depth=2)
+
+    assert chain.symbol == "app.service.add"
+    assert len(chain.callers) == 1
+
+    caller = chain.callers[0]
+    assert caller.symbol == "app.service.total"
+    assert caller.context_code == "return add(1, 2)"
+
+
+def test_build_call_chain_in_index_returns_empty_for_missing_symbol(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "service.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+
+    index = build_cst_index(tmp_path)
+    chain = build_call_chain_in_index(index, "app.service.missing", depth=2)
+
+    assert chain.symbol == "app.service.missing"
+    assert chain.callers == []
+
+
+def test_build_class_hierarchy_in_index_returns_direct_subclass(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "models.py").write_text(
+        "class User:\n"
+        "    pass\n"
+        "\n"
+        "class AdminUser(User):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    index = build_cst_index(tmp_path)
+    hierarchy = build_class_hierarchy_in_index(index, "app.models.User")
+
+    assert hierarchy.class_name == "app.models.User"
+    assert len(hierarchy.subclasses) == 1
+
+    subclass = hierarchy.subclasses[0]
+    assert subclass.class_name == "app.models.AdminUser"
+    assert subclass.location.relative_path == "app/models.py"
+    assert subclass.location.line == 4
+
+
+def test_build_class_hierarchy_in_index_returns_empty_for_missing_class(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "models.py").write_text(
+        "class User:\n"
+        "    pass\n"
+        "\n"
+        "class AdminUser(User):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    index = build_cst_index(tmp_path)
+    hierarchy = build_class_hierarchy_in_index(index, "app.models.Missing")
+
+    assert hierarchy.class_name == "app.models.Missing"
+    assert hierarchy.subclasses == []

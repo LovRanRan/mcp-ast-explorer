@@ -3,7 +3,15 @@ from pathlib import Path
 
 from fastmcp import Client
 
-from mcp_ast_explorer.server import find_definition, function_signature, health, mcp
+from mcp_ast_explorer.server import (
+    call_chain,
+    class_hierarchy,
+    find_definition,
+    find_references,
+    function_signature,
+    health,
+    mcp,
+)
 
 
 def test_health_returns_ok() -> None:
@@ -105,7 +113,19 @@ def test_mcp_client_can_call_health_definition_and_signature(tmp_path: Path) -> 
     package_dir = tmp_path / "app"
     package_dir.mkdir()
     (package_dir / "service.py").write_text(
-        "def add(a, b):\n    return a + b\n",
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+    (package_dir / "models.py").write_text(
+        "class User:\n"
+        "    pass\n"
+        "\n"
+        "class AdminUser(User):\n"
+        "    pass\n",
         encoding="utf-8",
     )
 
@@ -114,8 +134,11 @@ def test_mcp_client_can_call_health_definition_and_signature(tmp_path: Path) -> 
             tools = await client.list_tools()
             tool_names = {tool.name for tool in tools}
 
+            assert "call_chain" in tool_names
+            assert "class_hierarchy" in tool_names
             assert "health" in tool_names
             assert "find_definition" in tool_names
+            assert "find_references" in tool_names
             assert "function_signature" in tool_names
 
             health_result = await client.call_tool("health", {})
@@ -139,4 +162,171 @@ def test_mcp_client_can_call_health_definition_and_signature(tmp_path: Path) -> 
             assert signature_result.structured_content["found"] is True
             assert signature_result.structured_content["signature"] == "add(a, b)"
 
+            references_result = await client.call_tool(
+                "find_references",
+                {"path": str(tmp_path), "symbol": "app.service.add"},
+            )
+            assert references_result.structured_content is not None
+            assert references_result.structured_content["found"] is True
+            assert len(references_result.structured_content["references"]) == 1
+            assert references_result.structured_content["references"][0]["context_code"] == (
+                "return add(1, 2)"
+            )
+
+            call_chain_result = await client.call_tool(
+                "call_chain",
+                {"path": str(tmp_path), "from_symbol": "app.service.add", "depth": 2},
+            )
+            assert call_chain_result.structured_content is not None
+            assert call_chain_result.structured_content["found"] is True
+            assert len(call_chain_result.structured_content["callers"]) == 1
+            assert call_chain_result.structured_content["callers"][0]["symbol"] == (
+                "app.service.total"
+            )
+
+            hierarchy_result = await client.call_tool(
+                "class_hierarchy",
+                {"path": str(tmp_path), "class_name": "app.models.User"},
+            )
+            assert hierarchy_result.structured_content is not None
+            assert hierarchy_result.structured_content["found"] is True
+            assert len(hierarchy_result.structured_content["subclasses"]) == 1
+            assert hierarchy_result.structured_content["subclasses"][0]["class_name"] == (
+                "app.models.AdminUser"
+            )
+
     asyncio.run(run_client())
+
+
+def test_find_references_returns_call_site_for_existing_symbol(tmp_path: Path) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "service.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+
+    result = find_references(str(tmp_path), "app.service.add")
+
+    assert result.found is True
+    assert result.symbol == "app.service.add"
+    assert len(result.references) == 1
+
+    reference = result.references[0]
+    assert reference.qualified_name == "app.service.add"
+    assert reference.name == "add"
+    assert reference.kind == "function"
+    assert reference.location.relative_path == "app/service.py"
+    assert reference.location.line == 5
+    assert reference.context_code == "return add(1, 2)"
+
+
+def test_find_references_returns_not_found_for_missing_symbol(tmp_path: Path) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "service.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+
+    result = find_references(str(tmp_path), "app.service.missing")
+
+    assert result.found is False
+    assert result.symbol == "app.service.missing"
+    assert result.references == []
+    assert result.error == "Symbol not found: app.service.missing"
+
+
+def test_call_chain_returns_direct_caller_for_existing_symbol(tmp_path: Path) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "service.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+
+    result = call_chain(str(tmp_path), "app.service.add", depth=2)
+
+    assert result.found is True
+    assert result.symbol == "app.service.add"
+    assert len(result.callers) == 1
+
+    caller = result.callers[0]
+    assert caller.symbol == "app.service.total"
+    assert caller.context_code == "return add(1, 2)"
+
+
+def test_call_chain_returns_not_found_for_missing_symbol(tmp_path: Path) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "service.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def total():\n"
+        "    return add(1, 2)\n",
+        encoding="utf-8",
+    )
+
+    result = call_chain(str(tmp_path), "app.service.missing", depth=2)
+
+    assert result.found is False
+    assert result.symbol == "app.service.missing"
+    assert result.callers == []
+    assert result.error == "Symbol not found: app.service.missing"
+
+
+def test_class_hierarchy_returns_direct_subclass_for_existing_class(tmp_path: Path) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "models.py").write_text(
+        "class User:\n"
+        "    pass\n"
+        "\n"
+        "class AdminUser(User):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    result = class_hierarchy(str(tmp_path), "app.models.User")
+
+    assert result.found is True
+    assert result.class_name == "app.models.User"
+    assert len(result.subclasses) == 1
+
+    subclass = result.subclasses[0]
+    assert subclass.class_name == "app.models.AdminUser"
+    assert subclass.location.relative_path == "app/models.py"
+    assert subclass.location.line == 4
+
+
+def test_class_hierarchy_returns_not_found_for_missing_class(tmp_path: Path) -> None:
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "models.py").write_text(
+        "class User:\n"
+        "    pass\n"
+        "\n"
+        "class AdminUser(User):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    result = class_hierarchy(str(tmp_path), "app.models.Missing")
+
+    assert result.found is False
+    assert result.class_name == "app.models.Missing"
+    assert result.subclasses == []
+    assert result.error == "Class not found: app.models.Missing"
