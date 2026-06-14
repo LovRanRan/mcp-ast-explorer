@@ -122,6 +122,57 @@ def test_find_definition_in_index_returns_none_for_missing_symbol(
     assert find_definition_in_index(index, "main.missing") is None
 
 
+def test_find_definition_in_index_resolves_bare_symbol_name(
+    tmp_path: Path,
+) -> None:
+    # src-layout: qualified_name is "src.app.graph.state.merge_summaries" but a
+    # caller should be able to look it up by the bare name.
+    package_dir = tmp_path / "src" / "app" / "graph"
+    package_dir.mkdir(parents=True)
+    (package_dir / "state.py").write_text(
+        "def merge_summaries(left, right):\n    return {**left, **right}\n",
+        encoding="utf-8",
+    )
+    index = build_cst_index(tmp_path)
+
+    definition = find_definition_in_index(index, "merge_summaries")
+
+    assert definition is not None
+    assert definition.name == "merge_summaries"
+    assert definition.qualified_name == "src.app.graph.state.merge_summaries"
+
+
+def test_find_definition_in_index_resolves_partial_qualified_name(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "src" / "app" / "graph"
+    package_dir.mkdir(parents=True)
+    (package_dir / "state.py").write_text(
+        "def merge_summaries(left, right):\n    return left\n",
+        encoding="utf-8",
+    )
+    index = build_cst_index(tmp_path)
+
+    definition = find_definition_in_index(index, "graph.state.merge_summaries")
+
+    assert definition is not None
+    assert definition.qualified_name == "src.app.graph.state.merge_summaries"
+
+
+def test_find_definition_in_index_bare_name_ambiguous_returns_none(
+    tmp_path: Path,
+) -> None:
+    # Two distinct symbols share a leaf name -> refuse to guess.
+    (tmp_path / "a.py").write_text("def handler():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("def handler():\n    return 2\n", encoding="utf-8")
+    index = build_cst_index(tmp_path)
+
+    assert find_definition_in_index(index, "handler") is None
+    # Exact qualified names still resolve unambiguously.
+    assert find_definition_in_index(index, "a.handler") is not None
+    assert find_definition_in_index(index, "b.handler") is not None
+
+
 def test_build_cst_index_records_parse_errors_and_continues(tmp_path: Path) -> None:
     package_dir = tmp_path / "app"
     package_dir.mkdir()

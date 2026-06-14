@@ -193,9 +193,26 @@ def _position_for(visitor: cst.CSTVisitor, node: cst.CSTNode) -> CodeRange:
 
 
 def find_definition_in_index(index: PythonCstIndex, symbol: str) -> PythonSymbol | None:
+    # 1. Exact qualified-name match keeps precedence (unchanged behaviour).
     for candidate in index.symbols:
         if candidate.qualified_name == symbol:
             return candidate
+
+    # 2. Fall back to a bare or partially-qualified name so callers don't need to
+    #    know the full module path. On a src-layout repo a symbol's qualified_name
+    #    is e.g. "src.wayfinder.graph.state.merge_summaries"; this lets
+    #    "merge_summaries" or "graph.state.merge_summaries" resolve to it. Match on
+    #    a dotted-boundary suffix or the leaf name, and resolve only when the match
+    #    is unambiguous (one distinct symbol) — otherwise report not-found rather
+    #    than guess between collisions.
+    suffix = f".{symbol}"
+    matches = {
+        candidate.qualified_name: candidate
+        for candidate in index.symbols
+        if candidate.qualified_name.endswith(suffix) or candidate.name == symbol
+    }
+    if len(matches) == 1:
+        return next(iter(matches.values()))
     return None
 
 
