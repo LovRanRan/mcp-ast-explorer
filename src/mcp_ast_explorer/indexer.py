@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from pathlib import Path
 
 import libcst as cst
@@ -236,6 +237,12 @@ def _is_ignored(path: Path, root: Path) -> bool:
     return any(part in IGNORED_DIRS for part in relative_parts)
 
 
+def iter_python_files(root_path: Path) -> Iterator[Path]:
+    for path in sorted(root_path.rglob("*.py")):
+        if not _is_ignored(path, root_path):
+            yield path
+
+
 def build_cst_index(root: str | Path) -> PythonCstIndex:
     root_path = Path(root).resolve()
     files: list[ParsedPythonFile] = []
@@ -243,10 +250,7 @@ def build_cst_index(root: str | Path) -> PythonCstIndex:
     parse_errors: list[PythonParseError] = []
     references: list[PythonReference] = []
 
-    for path in sorted(root_path.rglob("*.py")):
-        if _is_ignored(path, root_path):
-            continue
-
+    for path in iter_python_files(root_path):
         source = path.read_text(encoding="utf-8")
         relative_path = path.relative_to(root_path).as_posix()
         try:

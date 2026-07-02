@@ -32,6 +32,33 @@ def test_main_runs_stdio_transport(monkeypatch) -> None:
     assert calls == [{"transport": "stdio"}]
 
 
+def test_tool_calls_reuse_cached_index(tmp_path: Path, monkeypatch) -> None:
+    from mcp_ast_explorer import cache
+
+    package_dir = tmp_path / "app"
+    package_dir.mkdir()
+    (package_dir / "service.py").write_text(
+        "def add(a, b):\n    return a + b\n",
+        encoding="utf-8",
+    )
+
+    build_count = 0
+    real_build = cache.build_cst_index
+
+    def counting_build(root: str | Path):
+        nonlocal build_count
+        build_count += 1
+        return real_build(root)
+
+    monkeypatch.setattr(cache, "build_cst_index", counting_build)
+
+    assert find_definition(str(tmp_path), "app.service.add").found is True
+    assert find_references(str(tmp_path), "app.service.add").found is True
+    assert function_signature(str(tmp_path), "app.service.add").found is True
+
+    assert build_count == 1
+
+
 def test_find_definition_returns_definition_for_existing_symbol(tmp_path: Path) -> None:
     package_dir = tmp_path / "app"
     package_dir.mkdir()

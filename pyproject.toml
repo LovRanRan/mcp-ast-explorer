@@ -7,7 +7,7 @@ packages = ["src/mcp_ast_explorer"]
 
 [project]
 name = "mcp-ast-explorer"
-version = "0.1.1"
+version = "0.2.0"
 description = "MCP server for Python AST/CST symbol exploration."
 readme = "README.md"
 license = "MIT"

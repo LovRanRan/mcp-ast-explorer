@@ -1,10 +1,10 @@
 from fastmcp import FastMCP
 
 from mcp_ast_explorer.backends import is_supported_language, unsupported_language_error
+from mcp_ast_explorer.cache import get_cst_index
 from mcp_ast_explorer.indexer import (
     build_call_chain_in_index,
     build_class_hierarchy_in_index,
-    build_cst_index,
     find_definition_in_index,
     find_references_in_index,
 )
@@ -39,7 +39,7 @@ def find_definition(path: str, symbol: str, language: str = "python") -> Definit
             error=unsupported_language_error(language),
         )
 
-    index = build_cst_index(path)
+    index = get_cst_index(path)
     definition = find_definition_in_index(index, symbol)
     if definition is None:
         return DefinitionResult(
@@ -75,7 +75,7 @@ def find_references(path: str, symbol: str, language: str = "python") -> FindRef
             error=unsupported_language_error(language),
         )
 
-    index = build_cst_index(path)
+    index = get_cst_index(path)
     definition = find_definition_in_index(index, symbol)
     if definition is None:
         return FindReferencesResult(
@@ -119,7 +119,7 @@ def function_signature(
             error=unsupported_language_error(language),
         )
 
-    index = build_cst_index(path)
+    index = get_cst_index(path)
     definition = find_definition_in_index(index, symbol)
     if definition is None:
         return FunctionSignatureResult(
@@ -163,7 +163,7 @@ def call_chain(
             error=unsupported_language_error(language),
         )
 
-    index = build_cst_index(path)
+    index = get_cst_index(path)
     definition = find_definition_in_index(index, from_symbol)
     if not definition:
         return CallChainResult(
@@ -200,7 +200,7 @@ def class_hierarchy(
             error=unsupported_language_error(language),
         )
 
-    index = build_cst_index(path)
+    index = get_cst_index(path)
     definition = find_definition_in_index(index, class_name)
     if definition is None or definition.kind != "class":
         return ClassHierarchyResult(
